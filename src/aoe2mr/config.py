@@ -32,7 +32,7 @@ class RegionsConfig:
 @dataclass(frozen=True)
 class SamplingConfig:
     interval_ms: int = 1000
-    max_snapshot_bytes: int = 256 * 1024 * 1024
+    max_snapshot_bytes: int = 2 * 1024 * 1024 * 1024
 
 
 @dataclass(frozen=True)

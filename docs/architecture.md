@@ -69,12 +69,20 @@ class ReadOnlyProcess(Protocol):          # context manager
 All models are frozen dataclasses with enums, so they are hashable, comparable and safe to
 pass between threads.
 
+## Snapshot analysis (M2)
+
+`ResearchSession(backend, pid, ...)` is the single object the UI drives:
+`capture()` -> `scan_value()` / `apply_filter()` -> `read_live()`, plus `annotate()`,
+`reset()` and `to_record()`. It keeps two snapshots at most, stores candidates in compact
+`array` objects and appends a `TimelineEvent` for every step.
+
 ## Threading model
 
-Services are synchronous and side-effect free apart from logging. The UI (M7) will run them
-in `QThreadPool` workers and pass a `CancellationToken`; long loops check it periodically.
-Periodic sampling (M2+) will use a single timer with a configurable interval and only while
-the user has explicitly started a session.
+Services are synchronous and side-effect free apart from logging. The desktop window runs
+them in `QThreadPool` workers with a `CancellationToken`; long loops check it periodically.
+Only one heavy operation runs at a time. Two timers exist, both only while the window is open:
+the game watcher (process list only, every 2 s, no memory access) and the optional
+"Live values" refresh (reads at most 200 candidate addresses per tick).
 
 ## Future data sources
 

@@ -5,8 +5,22 @@ investigates, strictly read-only and in single-player only, whether useful gamep
 information can be observed in the game's process memory, and (in later milestones) turns
 validated observations into rule-based strategic advice.
 
-> **Status: milestones M0 and M1 are implemented.** Snapshots, experiments, the game-state
-> model, the advisor and the PySide6 UI are planned (see [docs/milestones.md](docs/milestones.md)).
+> **Status: M0, M1 and M2 are implemented**, plus an early desktop window (brought forward
+> from M7). Experiments, the game-state model and the advisor are planned
+> (see [docs/milestones.md](docs/milestones.md)).
+
+## Download and run (no Python needed)
+
+**[AoE2MemoryResearch-win64.zip](https://github.com/MrFischoeder/aoe2-memory-research/releases/download/latest-build/AoE2MemoryResearch-win64.zip)**
+is rebuilt automatically after every push (pre-release `latest-build`).
+
+1. Unzip anywhere (for example `C:\Tools\AoE2MemoryResearch`).
+2. Double-click **`start_game_and_aoe2mr.bat`** to start the game through Steam together with
+   the research window, or **`start_aoe2mr.bat`** if the game is already running.
+3. The window waits for `AoE2DE_s.exe` and attaches automatically (read-only).
+
+Windows SmartScreen may warn because the program is unsigned ("More info" -> "Run anyway").
+See [docs/memory-research-workflow.md](docs/memory-research-workflow.md) for how to find values.
 
 ## Safety boundaries
 
@@ -39,6 +53,7 @@ py -3.11 -m venv .venv
 python -m pip install -e ".[dev]"
 
 python -m pytest                    # unit + Windows integration tests
+aoe2mr-gui                          # the desktop window (or double-click start_aoe2mr.bat)
 aoe2mr info                         # Python bitness, elevation, configured targets
 aoe2mr processes                    # find AoE2DE_s.exe and report access level
 aoe2mr processes --all --filter steam
@@ -71,6 +86,7 @@ Saved reports go to `research_data/` (git-ignored). Override settings with
 | [docs/feasibility.md](docs/feasibility.md) | Feasibility without bypassing protections; alternative data sources |
 | [docs/safety-policy.md](docs/safety-policy.md) | Hard limits and their enforcement |
 | [docs/synthetic-target.md](docs/synthetic-target.md) | The synthetic test process and its protocol |
+| [docs/memory-research-workflow.md](docs/memory-research-workflow.md) | How to find a value with snapshots and filters |
 | [docs/milestones.md](docs/milestones.md) | M0-M7 scope, acceptance criteria, status |
 
 ## Repository layout
@@ -81,15 +97,17 @@ src/aoe2mr/
     win32/             read-only Win32 bindings, access-right allowlist
   process_discovery/   find AoE2 DE, report path / architecture / access level   (M1)
   memory_research/     region enumeration, decoding, summaries                    (M1)
-  snapshot_analysis/   snapshots and comparison                                   (M2)
+  snapshot_analysis/   snapshots, typed scans, comparison, timeline               (M2)
   experiment_manager/  controlled experiments, candidate validation               (M3)
   game_state/          source-independent game-state model with UNKNOWN           (M5)
   strategy_engine/     deterministic rule-based advisor                           (M6)
-  desktop_ui/          PySide6 interface                                          (M7)
+  desktop_ui/          PySide6 window (early version; full UI in M7)
   persistence/         JSON result store
   synthetic/           synthetic target process
   config.py  app_logging.py  errors.py  concurrency.py  cli.py
 tests/                 pytest suite (Windows-only tests skip elsewhere)
 docs/                  design and research documentation
 config/                example user configuration
+packaging/             PyInstaller entry point and .bat launchers for the zip
+start_aoe2mr.bat       run the window from a source checkout (creates .venv on first run)
 ```

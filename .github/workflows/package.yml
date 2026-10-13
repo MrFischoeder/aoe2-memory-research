@@ -1,0 +1,62 @@
+name: Windows package
+
+# Builds AoE2MemoryResearch-win64.zip (PyInstaller, no Python needed) on every push and
+# publishes it as the rolling "latest-build" pre-release, so the download link never changes:
+# https://github.com/MrFischoeder/aoe2-memory-research/releases/download/latest-build/AoE2MemoryResearch-win64.zip
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: package
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install ".[build]"
+      - name: Build executable
+        run: >
+          pyinstaller --noconfirm --clean --windowed
+          --name AoE2MemoryResearch
+          --collect-data aoe2mr
+          --distpath dist
+          packaging/pyinstaller/launch_gui.py
+      - name: Smoke test (imports inside the frozen app)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/AoE2MemoryResearch/AoE2MemoryResearch.exe)) { throw "exe missing" }
+          if (-not (Get-ChildItem -Recurse dist/AoE2MemoryResearch -Filter default_config.toml)) { throw "config missing" }
+      - name: Assemble zip
+        shell: pwsh
+        run: |
+          $pkg = "package/AoE2MemoryResearch"
+          New-Item -ItemType Directory -Force $pkg | Out-Null
+          Copy-Item -Recurse dist/AoE2MemoryResearch "$pkg/AoE2MemoryResearch"
+          Copy-Item packaging/windows/*.bat, packaging/windows/README.txt $pkg
+          "Built from ${{ github.ref_name }} @ ${{ github.sha }}" | Out-File "$pkg/VERSION.txt"
+          Compress-Archive -Path $pkg -DestinationPath AoE2MemoryResearch-win64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AoE2MemoryResearch-win64
+          path: AoE2MemoryResearch-win64.zip
+      - name: Publish rolling pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest-build --yes --cleanup-tag || true
+          gh release create latest-build AoE2MemoryResearch-win64.zip \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Latest build (${GITHUB_REF_NAME} @ ${GITHUB_SHA::7})" \
+            --notes "Automatic Windows build of ${GITHUB_REF_NAME} at ${GITHUB_SHA}. Unzip, then double-click start_aoe2mr.bat."

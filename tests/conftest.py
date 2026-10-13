@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import sys
+
 import pytest
 
 from aoe2mr.backends.fake import FakeProcess, FakeProcessBackend
@@ -41,3 +44,13 @@ def fake_backend() -> FakeProcessBackend:
     notepad = FakeProcess(entry=ProcessEntry(900, 1, "notepad.exe", 2),
                           path=r"C:\Windows\notepad.exe", architecture=Architecture.X64)
     return FakeProcessBackend([aoe, protected, elevated, notepad])
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """On GitHub Actions, surface failures as annotations (readable without the raw log)."""
+    if not report.failed or not os.environ.get("GITHUB_ACTIONS"):
+        return
+    text = str(report.longrepr)[-3000:]
+    message = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+    sys.__stdout__.write(f"\n::error title={report.nodeid} ({report.when})::{message}\n")
+    sys.__stdout__.flush()
