@@ -13,6 +13,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 
 from aoe2mr.backends.fake import FakeProcessBackend
@@ -27,6 +28,11 @@ def qapp() -> QApplication:
     app = QApplication.instance() or QApplication([])
     assert isinstance(app, QApplication)
     return app
+
+
+def close_window(w: MainWindow) -> None:
+    w.close()  # WA_DeleteOnClose: destroyed on the next DeferredDelete pass
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
 
 
 def wait_until(app: QApplication, condition: Callable[[], bool], timeout: float = 5.0) -> None:
@@ -46,7 +52,7 @@ def window(qapp: QApplication, fake_backend: FakeProcessBackend,
                     persistence=PersistenceConfig(data_dir=tmp_path))
     w = MainWindow(fake_backend, cfg)
     yield w
-    w.close()
+    close_window(w)
 
 
 def set_wood(backend: FakeProcessBackend, value: int) -> None:
@@ -113,7 +119,7 @@ def test_waits_when_no_game(qapp: QApplication, tmp_path: Path) -> None:
         assert w.details is None and "Waiting for the game" in w.watch_label.text()
         assert not w.snapshot_button.isEnabled()
     finally:
-        w.close()
+        close_window(w)
 
 
 def test_denied_process_is_not_researched(qapp: QApplication, window: MainWindow) -> None:

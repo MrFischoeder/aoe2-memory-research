@@ -26,6 +26,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--pid", type=int, help="attach to this PID instead of waiting for AoE2")
     args = parser.parse_args(argv)
 
+    from PySide6.QtCore import QEvent
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     from aoe2mr.desktop_ui.main_window import MainWindow
@@ -49,4 +50,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     window = MainWindow(backend, config, attach_pid=args.pid)
     window.show()
-    return int(app.exec())
+    code = int(app.exec())
+    # Make sure no widget outlives the event loop (see MainWindow WA_DeleteOnClose).
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    return code

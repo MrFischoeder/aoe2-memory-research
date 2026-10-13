@@ -116,6 +116,10 @@ class MainWindow(QMainWindow):
         self.live_busy = False
         self._live_worker: Worker | None = None
 
+        # Destroy the C++ widget tree on close, before QApplication goes away; otherwise Python
+        # reference cycles (signal lambdas) keep it alive until interpreter shutdown, which
+        # crashes Qt.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle(f"AoE2 Memory Research {__version__} (read-only)")
         self.resize(1150, 780)
         tabs = QTabWidget()
