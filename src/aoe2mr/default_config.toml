@@ -1,0 +1,30 @@
+# Default configuration for aoe2-memory-research.
+# Copy config/user_config.example.toml and pass it with --config to override values.
+
+[discovery]
+# Executable names (case-insensitive) treated as Age of Empires II: DE.
+target_executables = ["AoE2DE_s.exe"]
+
+[regions]
+# Regions smaller than this are omitted from reports (bytes).
+min_region_size = 4096
+# Hard cap on regions enumerated per inspection, to bound CPU and memory use.
+max_regions = 200000
+# Only report committed regions by default.
+committed_only = true
+
+[sampling]
+# Reserved for M2+: interval between user-activated samples (milliseconds).
+interval_ms = 1000
+# Reserved for M2+: upper bound on bytes captured by one snapshot.
+max_snapshot_bytes = 268435456
+
+[persistence]
+# Relative paths are resolved against the current working directory.
+data_dir = "research_data"
+
+[logging]
+level = "INFO"
+file_name = "aoe2mr.log"
+max_bytes = 1048576
+backup_count = 3

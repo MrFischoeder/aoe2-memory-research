@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+# Local research output (may contain memory dumps; never commit)
+research_data/
+*.snapshot
+*.dmp
