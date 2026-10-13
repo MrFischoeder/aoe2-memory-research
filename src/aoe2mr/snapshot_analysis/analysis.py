@@ -66,6 +66,8 @@ def scan_value(
         else:
             values = data_type.decode_array(region.data)
             for i, v in enumerate(values):
+                if cancel is not None and i % 65536 == 0:
+                    cancel.raise_if_cancelled()
                 if value_filter.matches(None, v):
                     result.addresses.append(base + i * size)
                     result.values.append(v)

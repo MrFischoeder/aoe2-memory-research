@@ -266,3 +266,34 @@ def test_live_read_marks_unreadable(game: Game) -> None:
     s.scan_value(DataType.INT32, ValueFilter(FilterKind.EQUALS, 200))
     game.proc.regions = []
     assert all(v.value is None for v in s.read_live())
+
+
+def test_session_evicts_before_capture(game: Game) -> None:
+    s = session(game)
+    s.capture()
+    s.capture()
+    seen: list[int] = []
+    original = s._capturer.capture
+
+    def spy(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(len(s.snapshots))
+        return original(*args, **kwargs)
+
+    s._capturer.capture = spy  # type: ignore[method-assign]
+    s.capture()
+    assert seen == [1]  # only the previous snapshot is held while the new one is read
+    assert [x.snapshot_id for x in s.snapshots] == [2, 3]
+
+
+def test_tolerant_scan_is_cancellable(game: Game) -> None:
+    snap = capturer(game).capture(PID)
+    token = CancellationToken()
+    token.cancel()
+    with pytest.raises(OperationCancelledError):
+        scan_value(snap, DataType.FLOAT32, ValueFilter(FilterKind.EQUALS, 1.0, 0.5),
+                   cancel=token)
+
+
+def test_whole_region_is_captured_without_copy(game: Game) -> None:
+    snap = capturer(game).capture(PID)
+    assert isinstance(snap.regions[0].data, bytearray)

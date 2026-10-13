@@ -34,7 +34,8 @@ When the number is not shown exactly (an internal timer, a cooldown):
   this. Validation across independent experiments is milestone M3.
 - Addresses change every time the game starts. A candidate from yesterday means nothing
   today; M3/M4 will look for stable ways to find the value again.
-- Snapshot size is capped by `sampling.max_snapshot_bytes` (1 GiB by default). The timeline
+- Snapshot size is capped by `sampling.max_snapshot_bytes` (1 GiB by default). At most two
+  snapshots are held at once, so peak memory use is about twice the cap. The timeline
   says when a snapshot was truncated. Raise the cap in a config file if needed.
 
 ## Practising without the game

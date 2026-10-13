@@ -36,11 +36,11 @@ class DataType(StrEnum):
     def is_float(self) -> bool:
         return self in (DataType.FLOAT32, DataType.FLOAT64)
 
-    def decode(self, data: bytes) -> int | float:
+    def decode(self, data: bytes | bytearray) -> int | float:
         value: int | float = struct.unpack("<" + _STRUCT[self], data)[0]
         return value
 
-    def decode_array(self, data: bytes | memoryview) -> array:  # type: ignore[type-arg]
+    def decode_array(self, data: bytes | bytearray | memoryview) -> array:  # type: ignore[type-arg]
         values = array(self.typecode)
         values.frombytes(bytes(data[: len(data) - len(data) % self.size]))
         return values
@@ -128,7 +128,7 @@ class ValueFilter:
 @dataclass(frozen=True)
 class SnapshotRegion:
     base_address: int
-    data: bytes
+    data: bytes | bytearray  # bytearray when captured whole (avoids a copy); never mutated
 
     @property
     def size(self) -> int:

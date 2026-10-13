@@ -77,29 +77,35 @@ class SnapshotCapturer:
                     break
                 size = min(region.size, budget)
                 truncated = truncated or size < region.size
-                # Read in chunks; a failed chunk splits the region into separate pieces.
-                piece_start = region.base_address
-                piece = bytearray()
+                # Read in chunks straight into one preallocated buffer (no second copy).
+                # A failed chunk splits the region into separate pieces.
+                buf = bytearray(size)
+                view = memoryview(buf)
+                good: list[tuple[int, int]] = []  # readable [start, end) offsets
                 for offset in range(0, size, CHUNK_SIZE):
                     if cancel is not None:
                         cancel.raise_if_cancelled()
-                    address = region.base_address + offset
                     length = min(CHUNK_SIZE, size - offset)
                     try:
-                        data = proc.read(address, length)
+                        view[offset: offset + length] = proc.read(region.base_address + offset,
+                                                                  length)
                     except MemoryReadError:
                         failed += 1
-                        if piece:
-                            captured.append(SnapshotRegion(piece_start, bytes(piece)))
-                        piece = bytearray()
-                        piece_start = address + length
                         continue
-                    piece += data
+                    if good and good[-1][1] == offset:
+                        good[-1] = (good[-1][0], offset + length)
+                    else:
+                        good.append((offset, offset + length))
                     done += length
                     if progress is not None:
                         progress(done, min(planned, self._max_bytes))
-                if piece:
-                    captured.append(SnapshotRegion(piece_start, bytes(piece)))
+                view.release()
+                if good == [(0, size)]:
+                    captured.append(SnapshotRegion(region.base_address, buf))
+                else:
+                    captured.extend(SnapshotRegion(region.base_address + a, bytes(buf[a:b]))
+                                    for a, b in good)
+                del buf
                 budget -= size
         snap = Snapshot(
             snapshot_id=next(self._ids),

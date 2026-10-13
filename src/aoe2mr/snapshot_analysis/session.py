@@ -74,6 +74,11 @@ class ResearchSession:
     def capture(self, label: str = "", *, selection: CaptureSelection | None = None,
                 cancel: CancellationToken | None = None,
                 progress: ProgressCallback | None = None) -> Snapshot:
+        with self._lock:
+            # Drop the oldest snapshot *before* capturing, so peak memory stays at two
+            # snapshots (the previous one, kept for comparison, plus the new one).
+            while len(self.snapshots) >= MAX_SNAPSHOTS_IN_MEMORY:
+                self.snapshots.popleft()
         snap = self._capturer.capture(self.pid, label, selection=selection, cancel=cancel,
                                       progress=progress)
         with self._lock:
