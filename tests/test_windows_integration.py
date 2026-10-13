@@ -106,3 +106,28 @@ def test_exited_process(backend) -> None:  # type: ignore[no-untyped-def]
 def test_protected_system_process_is_not_readable(backend) -> None:  # type: ignore[no-untyped-def]
     details = ProcessDiscovery(backend, DiscoveryConfig()).describe(4)  # "System"
     assert details.access in (AccessStatus.DENIED, AccessStatus.QUERY_ONLY)
+
+
+def test_snapshot_search_finds_synthetic_wood(target: Target, backend) -> None:  # type: ignore[no-untyped-def]
+    """M2 end to end: scan for 200, gather 25 wood, narrow with 'increased by 25'."""
+    from aoe2mr.config import SamplingConfig
+    from aoe2mr.snapshot_analysis.models import DataType, FilterKind, ValueFilter
+    from aoe2mr.snapshot_analysis.session import ResearchSession
+
+    pid, address = target.ready["pid"], target.ready["address"]
+    wood = address + target.ready["layout"]["wood"]["offset"]
+    session = ResearchSession(backend, pid, RegionsConfig(min_region_size=0),
+                              SamplingConfig(max_snapshot_bytes=512 * 1024 * 1024))
+    session.capture("start")
+    first = session.scan_value(DataType.INT32, ValueFilter(FilterKind.EQUALS, 200))
+    assert wood in set(first.addresses)
+
+    target.send("add wood 25")
+    session.capture("after +25 wood")
+    narrowed = session.apply_filter(ValueFilter(FilterKind.INCREASED_BY, 25))
+    assert wood in set(narrowed.addresses)
+    # The lagging display copy must have been rejected.
+    display = address + target.ready["layout"]["display_wood"]["offset"]
+    assert display not in set(narrowed.addresses)
+    live = {lv.address: lv.value for lv in session.read_live(len(narrowed))}
+    assert live[wood] == 225

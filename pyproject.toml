@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aoe2-memory-research"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read-only Windows process-memory research and rule-based strategy assistant for Age of Empires II: Definitive Edition (single-player)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,10 +21,14 @@ dependencies = []
 
 [project.optional-dependencies]
 ui = ["PySide6>=6.6"]
-dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10"]
+dev = ["pytest>=8.0", "ruff>=0.5", "mypy>=1.10", "PySide6>=6.6"]
+build = ["PySide6>=6.6", "pyinstaller>=6.6"]
 
 [project.scripts]
 aoe2mr = "aoe2mr.cli:main"
+
+[project.gui-scripts]
+aoe2mr-gui = "aoe2mr.desktop_ui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

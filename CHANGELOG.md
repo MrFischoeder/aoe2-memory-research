@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- M2: snapshots of selected regions (byte cap, chunked, cancellable), typed scans,
+  snapshot comparison, candidate narrowing, change timeline, session export.
+- Desktop window (PySide6) that waits for the game and attaches automatically, with
+  snapshot/search/live-value controls and a log view.
+- `.bat` launchers (one also starts the game through Steam) and a CI-built Windows `.exe`
+  zip published as the `latest-build` pre-release.
+
 ## 0.1.0 (unreleased)
 
 - M0: repository structure, typed TOML configuration, logging, JSON persistence, CI,

@@ -1,4 +1,1 @@
-"""PySide6 desktop interface.
-
-Placeholder: scheduled for milestone M7 (see docs/milestones.md). Not implemented yet.
-"""
+"""PySide6 desktop interface. Requires the optional ``ui`` extra (``pip install .[ui]``)."""
