@@ -1,13 +1,21 @@
-"""Typed models for snapshots, value filters and candidate sets."""
+"""Typed models for snapshots, value filters and candidate sets.
+
+Value arrays use numpy so that scanning a gigabyte of memory takes seconds, not minutes.
+"""
 
 from __future__ import annotations
 
-import math
 import struct
-from array import array
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
+
+import numpy as np
+import numpy.typing as npt
+
+AnyArray = npt.NDArray[Any]
+Mask = npt.NDArray[np.bool_]
 
 
 class DataType(StrEnum):
@@ -25,8 +33,8 @@ class DataType(StrEnum):
     FLOAT64 = "float64"
 
     @property
-    def typecode(self) -> str:
-        return _TYPECODES[self]
+    def np_dtype(self) -> np.dtype[Any]:
+        return np.dtype("<" + _STRUCT[self])
 
     @property
     def size(self) -> int:
@@ -40,10 +48,13 @@ class DataType(StrEnum):
         value: int | float = struct.unpack("<" + _STRUCT[self], data)[0]
         return value
 
-    def decode_array(self, data: bytes | bytearray | memoryview) -> array:  # type: ignore[type-arg]
-        values = array(self.typecode)
-        values.frombytes(bytes(data[: len(data) - len(data) % self.size]))
-        return values
+    def view(self, data: bytes | bytearray | memoryview) -> AnyArray:
+        """Zero-copy view of ``data`` as aligned values (trailing partial value ignored)."""
+        count = len(data) // self.size
+        return np.frombuffer(data, dtype=self.np_dtype, count=count)
+
+    def empty(self) -> AnyArray:
+        return np.empty(0, dtype=self.np_dtype)
 
     def coerce(self, text: str) -> int | float:
         """Parse user input for this type, rejecting values that do not fit."""
@@ -52,26 +63,21 @@ class DataType(StrEnum):
         except ValueError:
             raise ValueError(f"{text!r} is not a valid {self.value}") from None
         if not self.is_float:
-            bits = self.size * 8
-            lo, hi = ((-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
-                      if self.value.startswith("int") else (0, (1 << bits) - 1))
-            if not lo <= int(value) <= hi:
+            info = np.iinfo(self.np_dtype)
+            if not info.min <= int(value) <= info.max:
                 raise ValueError(f"{value} does not fit {self.value}")
         return value
 
 
-_TYPECODES = {
+_STRUCT = {
     DataType.INT8: "b", DataType.UINT8: "B", DataType.INT16: "h", DataType.UINT16: "H",
     DataType.INT32: "i", DataType.UINT32: "I", DataType.INT64: "q", DataType.UINT64: "Q",
     DataType.FLOAT32: "f", DataType.FLOAT64: "d",
 }
-_STRUCT = _TYPECODES  # identical letters for struct and array on Windows/Linux x64
-
-for _dt in DataType:  # guard against platforms where array sizes differ
-    assert array(_dt.typecode).itemsize == _dt.size, _dt
 
 
 class FilterKind(StrEnum):
+    DISPLAYED = "displayed"  # what the game shows: a float rounded/truncated to an integer
     EQUALS = "equals"
     CHANGED = "changed"
     UNCHANGED = "unchanged"
@@ -82,47 +88,67 @@ class FilterKind(StrEnum):
 
     @property
     def needs_operand(self) -> bool:
-        return self in (FilterKind.EQUALS, FilterKind.INCREASED_BY, FilterKind.DECREASED_BY)
+        return self in (FilterKind.DISPLAYED, FilterKind.EQUALS, FilterKind.INCREASED_BY,
+                        FilterKind.DECREASED_BY)
 
     @property
     def needs_previous(self) -> bool:
-        return self is not FilterKind.EQUALS
+        return self not in (FilterKind.EQUALS, FilterKind.DISPLAYED)
 
 
 @dataclass(frozen=True)
 class ValueFilter:
     kind: FilterKind
     operand: float | int | None = None
-    tolerance: float = 0.0  # absolute tolerance, used for float types
+    tolerance: float = 0.0  # absolute tolerance
 
     def __post_init__(self) -> None:
         if self.kind.needs_operand and self.operand is None:
             raise ValueError(f"filter {self.kind.value} needs a value")
 
-    def matches(self, old: float | int | None, new: float | int) -> bool:
-        if isinstance(new, float) and math.isnan(new):
-            return False
-        tol = self.tolerance
+    def mask(self, old: AnyArray | None, new: AnyArray) -> Mask:
+        """Vectorised filter: which ``new`` values (vs. ``old``) satisfy it."""
         k = self.kind
+        tol = self.tolerance
+        if np.issubdtype(new.dtype, np.floating):
+            finite = np.isfinite(new)
+        else:
+            finite = np.ones(new.shape, dtype=bool)
+        n = new.astype(np.float64)
+        if k is FilterKind.DISPLAYED:
+            assert self.operand is not None
+            # The game shows a whole number. Accept values that truncate or round to it.
+            lo, hi = float(self.operand) - 0.5 - tol, float(self.operand) + 1.0 + tol
+            return finite & (n >= lo) & (n < hi)
         if k is FilterKind.EQUALS:
             assert self.operand is not None
-            return abs(new - self.operand) <= tol
-        assert old is not None
+            return finite & (np.abs(n - float(self.operand)) <= tol)
+        assert old is not None, f"{k.value} needs previous values"
+        o = old.astype(np.float64)
+        if np.issubdtype(old.dtype, np.floating):
+            finite &= np.isfinite(old)
+        d = n - o
         if k is FilterKind.CHANGED:
-            return abs(new - old) > tol
+            return finite & (np.abs(d) > tol)
         if k is FilterKind.UNCHANGED:
-            return abs(new - old) <= tol
+            return finite & (np.abs(d) <= tol)
         if k is FilterKind.INCREASED:
-            return new > old + tol
+            return finite & (d > tol)
         if k is FilterKind.DECREASED:
-            return new < old - tol
+            return finite & (d < -tol)
         assert self.operand is not None
         if k is FilterKind.INCREASED_BY:
-            return abs((new - old) - self.operand) <= tol
-        return abs((old - new) - self.operand) <= tol  # DECREASED_BY
+            return finite & (np.abs(d - float(self.operand)) <= tol)
+        return finite & (np.abs(-d - float(self.operand)) <= tol)  # DECREASED_BY
+
+    def matches(self, old: float | int | None, new: float | int) -> bool:
+        """Scalar convenience wrapper around :meth:`mask`."""
+        o = None if old is None else np.array([old], dtype=np.float64)
+        return bool(self.mask(o, np.array([new], dtype=np.float64))[0])
 
     def describe(self) -> str:
-        return self.kind.value + ("" if self.operand is None else f" {self.operand}")
+        text = self.kind.value + ("" if self.operand is None else f" {self.operand}")
+        return text + (f" ±{self.tolerance:g}" if self.tolerance else "")
 
 
 @dataclass(frozen=True)
@@ -154,13 +180,14 @@ class Snapshot:
     failed_chunks: int
     truncated: bool
     duration_s: float
+    planned_bytes: int = 0  # bytes selected before the cap was applied
 
     @property
     def total_bytes(self) -> int:
         return sum(r.size for r in self.regions)
 
     def region_for(self, address: int, size: int = 1) -> SnapshotRegion | None:
-        for r in self.regions:  # regions are sorted; few hundred at most
+        for r in self.regions:
             if r.contains(address, size):
                 return r
         return None
@@ -175,24 +202,21 @@ class Snapshot:
 
 @dataclass
 class CandidateSet:
-    """Addresses still consistent with every filter applied so far.
-
-    Addresses and values are stored in compact arrays so millions of candidates stay cheap.
-    """
+    """Addresses still consistent with every filter applied so far (numpy arrays)."""
 
     data_type: DataType
-    addresses: array  # type: ignore[type-arg]
-    values: array  # type: ignore[type-arg]
-    snapshot_id: int
+    addresses: npt.NDArray[np.uint64]
+    values: AnyArray
     history: list[str] = field(default_factory=list)
     truncated: bool = False
 
     def __len__(self) -> int:
-        return len(self.addresses)
+        return int(self.addresses.shape[0])
 
     def items(self, limit: int | None = None) -> list[tuple[int, int | float]]:
-        n = len(self.addresses) if limit is None else min(limit, len(self.addresses))
-        return [(self.addresses[i], self.values[i]) for i in range(n)]
+        n = len(self) if limit is None else min(limit, len(self))
+        return [(int(a), v.item()) for a, v in zip(self.addresses[:n], self.values[:n],
+                                                   strict=True)]
 
 
 @dataclass(frozen=True)

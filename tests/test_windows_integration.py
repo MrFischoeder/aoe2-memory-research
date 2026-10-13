@@ -118,16 +118,14 @@ def test_snapshot_search_finds_synthetic_wood(target: Target, backend) -> None: 
     wood = address + target.ready["layout"]["wood"]["offset"]
     session = ResearchSession(backend, pid, RegionsConfig(min_region_size=0),
                               SamplingConfig(max_snapshot_bytes=512 * 1024 * 1024))
-    session.capture("start")
-    first = session.scan_value(DataType.INT32, ValueFilter(FilterKind.EQUALS, 200))
-    assert wood in set(first.addresses)
+    first = session.new_scan(DataType.INT32, ValueFilter(FilterKind.EQUALS, 200))
+    assert first is not None and wood in first.addresses.tolist()
 
     target.send("add wood 25")
-    session.capture("after +25 wood")
-    narrowed = session.apply_filter(ValueFilter(FilterKind.INCREASED_BY, 25))
-    assert wood in set(narrowed.addresses)
+    narrowed = session.next_scan(ValueFilter(FilterKind.INCREASED_BY, 25))
+    assert wood in narrowed.addresses.tolist()
     # The lagging display copy must have been rejected.
     display = address + target.ready["layout"]["display_wood"]["offset"]
-    assert display not in set(narrowed.addresses)
+    assert display not in narrowed.addresses.tolist()
     live = {lv.address: lv.value for lv in session.read_live(len(narrowed))}
     assert live[wood] == 225

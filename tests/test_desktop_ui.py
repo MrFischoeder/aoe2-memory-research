@@ -73,23 +73,20 @@ def test_full_search_workflow(qapp: QApplication, window: MainWindow,
                               fake_backend: FakeProcessBackend, tmp_path: Path) -> None:
     wait_until(qapp, lambda: window.busy is None)
     set_wood(fake_backend, 777_777)
-    window.take_snapshot()
-    wait_until(qapp, lambda: window.busy is None and window.session is not None
-               and window.session.latest is not None)
+    window.type_combo.setCurrentText("int32")
+    window.filter_combo.setCurrentIndex(window.filter_combo.findData(FilterKind.EQUALS.value))
     window.value_edit.setText("777777")
-    window.apply_filter()
+    window.new_scan()
     wait_until(qapp, lambda: window.busy is None and window.session is not None
                and window.session.candidates is not None)
     assert window.candidate_table.rowCount() == 1
+    assert window.next_scan_button.isEnabled()
 
     set_wood(fake_backend, 777_800)
-    window.take_snapshot()
-    wait_until(qapp, lambda: window.busy is None and window.session is not None
-               and len(window.session.snapshots) == 2)
     window.filter_combo.setCurrentIndex(window.filter_combo.findData(FilterKind.INCREASED_BY.value))
     window.value_edit.setText("23")
-    window.apply_filter()
-    wait_until(qapp, lambda: window.busy is None and window.timeline_list.count() == 4)
+    window.next_scan()  # reads only the candidate addresses
+    wait_until(qapp, lambda: window.busy is None and window.timeline_list.count() == 3)
     assert window.candidate_table.item(0, 0).text() == f"0x{0x20040:016X}"
     assert window.candidate_table.item(0, 2).text() == "777800"
 
@@ -117,7 +114,7 @@ def test_waits_when_no_game(qapp: QApplication, tmp_path: Path) -> None:
         persistence=PersistenceConfig(data_dir=tmp_path)))
     try:
         assert w.details is None and "Waiting for the game" in w.watch_label.text()
-        assert not w.snapshot_button.isEnabled()
+        assert not w.new_scan_button.isEnabled()
     finally:
         close_window(w)
 

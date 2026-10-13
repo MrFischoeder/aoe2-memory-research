@@ -48,7 +48,7 @@ class SnapshotCapturer:
                  sampling: SamplingConfig) -> None:
         self._backend = backend
         self._regions = regions
-        self._max_bytes = sampling.max_snapshot_bytes
+        self.max_bytes = sampling.max_snapshot_bytes
         self._ids = itertools.count(1)
 
     def capture(
@@ -63,13 +63,16 @@ class SnapshotCapturer:
         selection = selection or CaptureSelection()
         started = time.perf_counter()
         captured: list[SnapshotRegion] = []
+        planned = 0
         failed = 0
         truncated = False
         with self._backend.open_read_only(pid) as proc:
-            plan = [r for r in proc.iter_regions(self._regions.max_regions)
-                    if selection.accepts(r)]
+            # Smallest regions first: game objects live in many small heap blocks, while the
+            # largest regions are mostly bulk buffers. If the byte cap is hit, it cuts those.
+            plan = sorted((r for r in proc.iter_regions(self._regions.max_regions)
+                           if selection.accepts(r)), key=lambda r: (r.size, r.base_address))
             planned = sum(r.size for r in plan)
-            budget = self._max_bytes
+            budget = self.max_bytes
             done = 0
             for region in plan:
                 if budget <= 0:
@@ -98,7 +101,7 @@ class SnapshotCapturer:
                         good.append((offset, offset + length))
                     done += length
                     if progress is not None:
-                        progress(done, min(planned, self._max_bytes))
+                        progress(done, min(planned, self.max_bytes))
                 view.release()
                 if good == [(0, size)]:
                     captured.append(SnapshotRegion(region.base_address, buf))
@@ -116,6 +119,7 @@ class SnapshotCapturer:
             failed_chunks=failed,
             truncated=truncated,
             duration_s=time.perf_counter() - started,
+            planned_bytes=planned,
         )
         log.info("Snapshot #%d of pid %d: %d bytes in %d regions (%.2fs, %d failed chunks%s)",
                  snap.snapshot_id, pid, snap.total_bytes, len(snap.regions), snap.duration_s,

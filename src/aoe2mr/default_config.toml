@@ -16,8 +16,8 @@ committed_only = true
 [sampling]
 # Interval for live value refresh in the UI while the user has it switched on (ms).
 interval_ms = 1000
-# Upper bound on bytes captured by one snapshot (two snapshots are kept in memory).
-max_snapshot_bytes = 1073741824
+# Upper bound on bytes read by one snapshot. At most two are held (unknown-value search).
+max_snapshot_bytes = 2147483648
 
 [persistence]
 # Relative paths are resolved against the current working directory.

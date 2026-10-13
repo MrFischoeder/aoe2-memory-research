@@ -60,7 +60,8 @@ MAX_CANDIDATE_ROWS = 500
 LIVE_ROWS = 200
 
 FILTER_LABELS = {
-    FilterKind.EQUALS: "equals value",
+    FilterKind.DISPLAYED: "value shown in game",
+    FilterKind.EQUALS: "exact value",
     FilterKind.CHANGED: "changed",
     FilterKind.UNCHANGED: "unchanged",
     FilterKind.INCREASED: "increased",
@@ -217,60 +218,78 @@ class MainWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
 
-        snap_box = QGroupBox("1. Snapshots")
-        srow = QHBoxLayout(snap_box)
-        self.snapshot_label_edit = QLineEdit()
-        self.snapshot_label_edit.setPlaceholderText("label, e.g. 'after gathering 10 wood'")
-        srow.addWidget(self.snapshot_label_edit, 1)
-        self.snapshot_button = QPushButton("Take snapshot")
-        self.snapshot_button.clicked.connect(self.take_snapshot)
-        srow.addWidget(self.snapshot_button)
-        self.progress = QProgressBar()
-        self.progress.setMaximumWidth(220)
-        srow.addWidget(self.progress)
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(self.cancel_work)
-        srow.addWidget(self.cancel_button)
-        lay.addWidget(snap_box)
+        help_label = QLabel(
+            "<b>How to find a value</b> (e.g. wood): type the number the game shows, "
+            "click <b>New scan</b>. Change it in game (gather wood), type the new number, "
+            "click <b>Next scan</b>. Repeat until a few candidates remain, then tick "
+            "<b>Live values</b>. Resources are usually <b>float32</b>; try int32 if nothing "
+            "is found."
+        )
+        help_label.setWordWrap(True)
+        lay.addWidget(help_label)
 
-        scan_box = QGroupBox("2. Search")
-        grow = QHBoxLayout(scan_box)
+        scan_box = QGroupBox("Search")
+        grid = QVBoxLayout(scan_box)
+        grow = QHBoxLayout()
         grow.addWidget(QLabel("Type:"))
         self.type_combo = QComboBox()
         for dt in DataType:
-            self.type_combo.addItem(dt.value, dt)
-        self.type_combo.setCurrentText(DataType.INT32.value)
+            self.type_combo.addItem(dt.value, dt.value)
+        self.type_combo.setCurrentText(DataType.FLOAT32.value)
         grow.addWidget(self.type_combo)
         grow.addWidget(QLabel("Filter:"))
         self.filter_combo = QComboBox()
         for kind, text in FILTER_LABELS.items():
-            self.filter_combo.addItem(text, kind)
+            self.filter_combo.addItem(text, kind.value)
         self.filter_combo.currentIndexChanged.connect(self._update_buttons)
         grow.addWidget(self.filter_combo)
         grow.addWidget(QLabel("Value:"))
         self.value_edit = QLineEdit()
-        self.value_edit.setMaximumWidth(120)
+        self.value_edit.setMaximumWidth(110)
+        self.value_edit.setPlaceholderText("e.g. 207")
+        self.value_edit.returnPressed.connect(self._enter_pressed)
         grow.addWidget(self.value_edit)
         grow.addWidget(QLabel("Tolerance:"))
         self.tolerance_edit = QLineEdit("0")
-        self.tolerance_edit.setMaximumWidth(70)
+        self.tolerance_edit.setMaximumWidth(60)
         grow.addWidget(self.tolerance_edit)
-        self.apply_button = QPushButton("Apply")
-        self.apply_button.setToolTip(
-            "No candidates yet: 'equals value' scans the newest snapshot; other filters "
-            "compare the two newest snapshots.\nWith candidates: narrows them using the "
-            "newest snapshot."
-        )
-        self.apply_button.clicked.connect(self.apply_filter)
-        grow.addWidget(self.apply_button)
-        self.reset_button = QPushButton("Reset candidates")
-        self.reset_button.clicked.connect(self.reset_candidates)
-        grow.addWidget(self.reset_button)
         grow.addStretch(1)
+        grid.addLayout(grow)
+
+        brow = QHBoxLayout()
+        self.new_scan_button = QPushButton("New scan")
+        self.new_scan_button.setToolTip("Snapshot the game's memory and search it. With "
+                                        "'changed'/'increased'/... only a baseline is taken.")
+        self.new_scan_button.clicked.connect(self.new_scan)
+        brow.addWidget(self.new_scan_button)
+        self.next_scan_button = QPushButton("Next scan")
+        self.next_scan_button.setToolTip("Re-read the current candidates (fast) and keep "
+                                         "those that match the filter.")
+        self.next_scan_button.clicked.connect(self.next_scan)
+        brow.addWidget(self.next_scan_button)
+        self.reset_button = QPushButton("Reset")
+        self.reset_button.clicked.connect(self.reset_candidates)
+        brow.addWidget(self.reset_button)
+        self.progress = QProgressBar()
+        self.progress.setMaximumWidth(220)
+        brow.addWidget(self.progress)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.cancel_work)
+        brow.addWidget(self.cancel_button)
+        brow.addStretch(1)
+        brow.addWidget(QLabel("Snapshot limit (MiB):"))
+        self.limit_spin = QSpinBox()
+        self.limit_spin.setRange(64, 16384)
+        self.limit_spin.setSingleStep(512)
+        self.limit_spin.setValue(self.config.sampling.max_snapshot_bytes // 2**20)
+        self.limit_spin.setToolTip("Upper bound on memory read by one snapshot. The timeline "
+                                   "says TRUNCATED when the game had more.")
+        brow.addWidget(self.limit_spin)
+        grid.addLayout(brow)
         lay.addWidget(scan_box)
 
         split = QSplitter()
-        cand_box = QGroupBox("3. Candidates")
+        cand_box = QGroupBox("Candidates")
         clay = QVBoxLayout(cand_box)
         crow = QHBoxLayout()
         self.candidate_label = QLabel("No candidates.")
@@ -281,7 +300,7 @@ class MainWindow(QMainWindow):
         self.live_check.toggled.connect(self._toggle_live)
         crow.addWidget(self.live_check)
         clay.addLayout(crow)
-        self.candidate_table = _readonly_table(["Address", "Type", "At last snapshot", "Live"])
+        self.candidate_table = _readonly_table(["Address", "Type", "At last scan", "Live"])
         clay.addWidget(self.candidate_table)
         split.addWidget(cand_box)
 
@@ -461,21 +480,15 @@ class MainWindow(QMainWindow):
                 self.region_table.setItem(i, j, QTableWidgetItem(text))
         self.region_table.resizeColumnsToContents()
 
-    def take_snapshot(self) -> None:
-        session = self.session
-        if session is None:
-            return
-        label = self.snapshot_label_edit.text().strip()
-        self._run(lambda token, progress: session.capture(label, cancel=token,
-                                                          progress=progress),
-                  lambda _snap: self._after_session_change(), "Snapshot")
-
     def _current_filter(self) -> tuple[DataType, ValueFilter] | None:
         dt = DataType(self.type_combo.currentData())
         kind = FilterKind(self.filter_combo.currentData())
         try:
-            operand = dt.coerce(self.value_edit.text().strip()) if kind.needs_operand else None
-            tolerance = float(self.tolerance_edit.text() or 0)
+            text = self.value_edit.text().strip().replace(",", ".")
+            if kind.needs_operand and not text:
+                raise ValueError("enter a value")
+            operand = dt.coerce(text) if kind.needs_operand else None
+            tolerance = float(self.tolerance_edit.text().replace(",", ".") or 0)
             if tolerance < 0:
                 raise ValueError("tolerance must be >= 0")
             return dt, ValueFilter(kind, operand, tolerance)
@@ -483,15 +496,37 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid search", str(exc))
             return None
 
-    def apply_filter(self) -> None:
+    def _apply_limit(self) -> None:
+        if self.session is not None:
+            self.session.set_snapshot_limit(self.limit_spin.value() * 2**20)
+
+    def new_scan(self) -> None:
         session = self.session
         parsed = self._current_filter()
         if session is None or parsed is None:
             return
+        self._apply_limit()
         dt, value_filter = parsed
-        self._run(lambda token, _p: session.apply_filter(value_filter, data_type=dt,
-                                                         cancel=token),
-                  lambda _c: self._after_session_change(), "Search")
+        self._run(lambda token, progress: session.new_scan(dt, value_filter, cancel=token,
+                                                           progress=progress),
+                  lambda _c: self._after_session_change(), "New scan")
+
+    def next_scan(self) -> None:
+        session = self.session
+        parsed = self._current_filter()
+        if session is None or parsed is None:
+            return
+        self._apply_limit()
+        dt, value_filter = parsed
+        self._run(lambda token, progress: session.next_scan(value_filter, data_type=dt,
+                                                            cancel=token, progress=progress),
+                  lambda _c: self._after_session_change(), "Next scan")
+
+    def _enter_pressed(self) -> None:
+        if self.next_scan_button.isEnabled():
+            self.next_scan()
+        elif self.new_scan_button.isEnabled():
+            self.new_scan()
 
     def reset_candidates(self) -> None:
         if self.session is not None:
@@ -582,13 +617,13 @@ class MainWindow(QMainWindow):
     def _update_buttons(self) -> None:
         idle = self.busy is None
         attached = self.session is not None
-        has_snap = attached and self.session is not None and self.session.latest is not None
+        waiting = self.session is not None and self.session.awaiting_next_scan
         data = self.filter_combo.currentData()
         kind = FilterKind(data) if data is not None else None
         self.value_edit.setEnabled(kind is not None and kind.needs_operand)
         self.refresh_regions_button.setEnabled(idle and self.details is not None)
-        self.snapshot_button.setEnabled(idle and attached)
-        self.apply_button.setEnabled(idle and has_snap)
+        self.new_scan_button.setEnabled(idle and attached)
+        self.next_scan_button.setEnabled(idle and waiting)
         self.reset_button.setEnabled(idle and attached)
         self.note_button.setEnabled(attached)
         self.save_button.setEnabled(attached)

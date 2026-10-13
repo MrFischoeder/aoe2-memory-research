@@ -8,6 +8,10 @@
   snapshot/search/live-value controls and a log view.
 - `.bat` launchers (one also starts the game through Steam) and a CI-built Windows `.exe`
   zip published as the `latest-build` pre-release.
+- Real-game search fixes: "value shown in game" filter (a float that displays as `n`),
+  float32 as the default type, New scan / Next scan workflow where a next scan re-reads only
+  the candidate addresses, numpy-vectorised scans, smallest regions captured first, 2 GiB
+  default snapshot limit adjustable in the window.
 
 ## 0.1.0 (unreleased)
 

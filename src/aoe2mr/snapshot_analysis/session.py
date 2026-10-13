@@ -1,13 +1,19 @@
-"""A research session: snapshots, the current candidate set and a change timeline.
+"""A research session: new scan / next scan, candidates and a change timeline.
 
-This is the single object the CLI and the desktop UI drive. It keeps at most a few snapshots
-in memory (bounded memory use) and records every step so results are reproducible.
+Workflow (the same as classic memory scanners, but read-only):
+
+* **New scan** with a known value (``displayed`` or ``equals``): take a snapshot, search it,
+  keep the matches as candidates and free the snapshot.
+* **New scan** without a value (``changed``, ``increased``...): take a baseline snapshot only.
+* **Next scan**: with candidates, read just those addresses from the live process and filter;
+  with only a baseline, take a second snapshot and compare the two.
+
+Every step is recorded in the timeline so results are reproducible.
 """
 
 from __future__ import annotations
 
 import threading
-from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -15,10 +21,11 @@ from typing import Any
 from aoe2mr.backends.base import ProcessBackend
 from aoe2mr.concurrency import CancellationToken
 from aoe2mr.config import RegionsConfig, SamplingConfig
-from aoe2mr.errors import MemoryReadError, ResearchError
+from aoe2mr.errors import ResearchError
 from aoe2mr.snapshot_analysis.analysis import (
     DEFAULT_MAX_CANDIDATES,
     compare_snapshots,
+    read_current,
     refine,
     scan_value,
 )
@@ -30,8 +37,6 @@ from aoe2mr.snapshot_analysis.models import (
     TimelineEvent,
     ValueFilter,
 )
-
-MAX_SNAPSHOTS_IN_MEMORY = 2  # enough to compare; bounds memory use
 
 
 class SessionStateError(ResearchError):
@@ -52,7 +57,7 @@ class ResearchSession:
         self.pid = pid
         self._capturer = SnapshotCapturer(backend, regions, sampling)
         self._max_candidates = max_candidates
-        self.snapshots: deque[Snapshot] = deque(maxlen=MAX_SNAPSHOTS_IN_MEMORY)
+        self.baseline: Snapshot | None = None  # only held for an unknown-value search
         self.candidates: CandidateSet | None = None
         self.timeline: list[TimelineEvent] = []
         self._lock = threading.Lock()
@@ -65,70 +70,93 @@ class ResearchSession:
         self.timeline.append(event)
         return event
 
-    @property
-    def latest(self) -> Snapshot | None:
-        return self.snapshots[-1] if self.snapshots else None
-
-    # -- operations -------------------------------------------------------------------------
-
-    def capture(self, label: str = "", *, selection: CaptureSelection | None = None,
-                cancel: CancellationToken | None = None,
-                progress: ProgressCallback | None = None) -> Snapshot:
-        with self._lock:
-            # Drop the oldest snapshot *before* capturing, so peak memory stays at two
-            # snapshots (the previous one, kept for comparison, plus the new one).
-            while len(self.snapshots) >= MAX_SNAPSHOTS_IN_MEMORY:
-                self.snapshots.popleft()
+    def _capture(self, label: str, selection: CaptureSelection | None,
+                 cancel: CancellationToken | None,
+                 progress: ProgressCallback | None) -> Snapshot:
         snap = self._capturer.capture(self.pid, label, selection=selection, cancel=cancel,
                                       progress=progress)
+        note = (f"snapshot #{snap.snapshot_id} {label!r}: {snap.total_bytes / 2**20:,.0f} MiB "
+                f"of {snap.planned_bytes / 2**20:,.0f} MiB, {len(snap.regions)} regions, "
+                f"{snap.duration_s:.1f}s")
+        if snap.truncated:
+            note += " (TRUNCATED: raise the snapshot limit)"
+        if snap.failed_chunks:
+            note += f", {snap.failed_chunks} unreadable chunks"
         with self._lock:
-            self.snapshots.append(snap)
-            note = (f"snapshot #{snap.snapshot_id} {label!r}: {snap.total_bytes:,} bytes, "
-                    f"{len(snap.regions)} regions, {snap.duration_s:.2f}s")
-            if snap.truncated:
-                note += " (truncated by max_snapshot_bytes)"
-            if snap.failed_chunks:
-                note += f", {snap.failed_chunks} unreadable chunks"
             self._event("snapshot", note, snap.snapshot_id)
         return snap
 
-    def scan_value(self, data_type: DataType, value_filter: ValueFilter, *,
-                   cancel: CancellationToken | None = None) -> CandidateSet:
-        snap = self.latest
-        if snap is None:
-            raise SessionStateError("take a snapshot first")
+    def set_snapshot_limit(self, max_bytes: int) -> None:
+        self._capturer.max_bytes = max_bytes
+
+    @property
+    def awaiting_next_scan(self) -> bool:
+        return self.candidates is not None or self.baseline is not None
+
+    # -- operations -------------------------------------------------------------------------
+
+    def new_scan(self, data_type: DataType, value_filter: ValueFilter, *, label: str = "",
+                 selection: CaptureSelection | None = None,
+                 cancel: CancellationToken | None = None,
+                 progress: ProgressCallback | None = None) -> CandidateSet | None:
+        """Start over. Returns candidates, or ``None`` when only a baseline was taken."""
+        with self._lock:
+            self.candidates = None
+            self.baseline = None  # free memory before capturing
+        snap = self._capture(label or "new scan", selection, cancel, progress)
+        if value_filter.kind.needs_previous:
+            with self._lock:
+                self.baseline = snap
+                self._event("scan", f"baseline for unknown {data_type.value} value; change it "
+                                    "in game, then run a next scan", snap.snapshot_id)
+            return None
         result = scan_value(snap, data_type, value_filter, max_candidates=self._max_candidates,
                             cancel=cancel)
         with self._lock:
             self.candidates = result
-            self._event("scan", result.history[-1], snap.snapshot_id)
+            self._event("scan", result.history[-1]
+                        + (" (candidate cap reached)" if result.truncated else ""),
+                        snap.snapshot_id)
         return result
 
-    def apply_filter(self, value_filter: ValueFilter, *, data_type: DataType | None = None,
-                     cancel: CancellationToken | None = None) -> CandidateSet:
-        """Narrow the candidates using the newest snapshot.
+    def next_scan(self, value_filter: ValueFilter, *, data_type: DataType | None = None,
+                  selection: CaptureSelection | None = None,
+                  cancel: CancellationToken | None = None,
+                  progress: ProgressCallback | None = None) -> CandidateSet:
+        """Narrow the candidates (live reads) or compare against the baseline snapshot."""
+        cand = self.candidates
+        if cand is not None:
+            if value_filter.kind.needs_previous and not len(cand):
+                raise SessionStateError("no candidates left; start a new scan")
+            with self.backend.open_read_only(self.pid) as proc:
+                values, ok = read_current(proc, cand.data_type, cand.addresses, cancel=cancel)
+            result = refine(cand, values, ok, value_filter,
+                            f"next {cand.data_type.value} {value_filter.describe()}")
+            with self._lock:
+                self.candidates = result
+                self._event("filter", result.history[-1])
+            return result
 
-        Without candidates, compares the two newest snapshots (unknown initial value).
-        """
-        snap = self.latest
-        if snap is None:
-            raise SessionStateError("take a snapshot first")
-        if self.candidates is None:
-            if data_type is None:
-                raise SessionStateError("choose a data type")
-            if not value_filter.kind.needs_previous:
-                return self.scan_value(data_type, value_filter, cancel=cancel)
-            if len(self.snapshots) < 2:
-                raise SessionStateError("take two snapshots, or scan for a known value first")
-            result = compare_snapshots(self.snapshots[-2], snap, data_type, value_filter,
-                                       max_candidates=self._max_candidates, cancel=cancel)
-        else:
-            if self.candidates.snapshot_id == snap.snapshot_id and value_filter.kind.needs_previous:
-                raise SessionStateError("take a new snapshot before filtering by change")
-            result = refine(self.candidates, snap, value_filter, cancel=cancel)
+        baseline = self.baseline
+        if baseline is None:
+            raise SessionStateError("start with a new scan")
+        if data_type is None:
+            raise SessionStateError("choose a data type")
+        if not value_filter.kind.needs_previous:
+            # A value is known now: search the live process instead of comparing.
+            found = self.new_scan(data_type, value_filter, selection=selection, cancel=cancel,
+                                  progress=progress)
+            assert found is not None
+            return found
+        snap = self._capture("next scan", selection, cancel, progress)
+        result = compare_snapshots(baseline, snap, data_type, value_filter,
+                                   max_candidates=self._max_candidates, cancel=cancel)
         with self._lock:
+            self.baseline = None  # candidates carry their own values from here on
             self.candidates = result
-            self._event("filter", result.history[-1], snap.snapshot_id)
+            self._event("filter", result.history[-1]
+                        + (" (candidate cap reached)" if result.truncated else ""),
+                        snap.snapshot_id)
         return result
 
     def annotate(self, text: str) -> TimelineEvent:
@@ -138,34 +166,25 @@ class ResearchSession:
     def reset(self) -> None:
         with self._lock:
             self.candidates = None
+            self.baseline = None
             self._event("reset", "candidates cleared")
 
     def read_live(self, limit: int = 200) -> list[LiveValue]:
-        """Read the current value of the first ``limit`` candidates directly (small reads)."""
+        """Read the current value of the first ``limit`` candidates directly."""
         cand = self.candidates
-        if cand is None:
+        if cand is None or not len(cand):
             return []
-        out = []
-        size = cand.data_type.size
+        addresses = cand.addresses[:limit]
         with self.backend.open_read_only(self.pid) as proc:
-            for address, _ in cand.items(limit):
-                try:
-                    out.append(LiveValue(address, cand.data_type.decode(proc.read(address, size))))
-                except MemoryReadError:
-                    out.append(LiveValue(address, None))
-        return out
+            values, ok = read_current(proc, cand.data_type, addresses)
+        return [LiveValue(int(a), v.item() if good else None)
+                for a, v, good in zip(addresses, values, ok, strict=True)]
 
     def to_record(self, max_candidates: int = 10_000) -> dict[str, Any]:
         """A JSON-ready record of the session (no raw memory contents)."""
         cand = self.candidates
         return {
             "pid": self.pid,
-            "snapshots": [
-                {"id": s.snapshot_id, "label": s.label, "captured_at": s.captured_at,
-                 "bytes": s.total_bytes, "regions": len(s.regions), "truncated": s.truncated,
-                 "failed_chunks": s.failed_chunks, "duration_s": round(s.duration_s, 3)}
-                for s in self.snapshots
-            ],
             "candidates": None if cand is None else {
                 "data_type": cand.data_type,
                 "count": len(cand),
