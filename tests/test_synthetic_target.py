@@ -51,6 +51,28 @@ def test_commands() -> None:
     assert v["display_food"] == 50 and v["display_wood"] == 225
 
 
+def test_rejected_value_leaves_state_unchanged() -> None:
+    game = SyntheticGame()
+    before = game.values()
+    for cmd in ("set population 100000", "add population 40000", "set age 300"):
+        with pytest.raises(CommandError):
+            game.apply(cmd)
+    assert game.values() == before
+
+
+def test_float_field_accepts_non_representable_values() -> None:
+    game = SyntheticGame()
+    assert game.apply("set game_time 0.1")["values"]["game_time"] == pytest.approx(0.1)
+    assert game.apply("tick 0.2")["values"]["game_time"] == pytest.approx(0.3)
+
+
+def test_run_survives_bad_tick() -> None:
+    out = io.StringIO()
+    run(["tick nope\n", "get\n", "quit\n"], out)
+    events = [json.loads(line)["event"] for line in out.getvalue().splitlines()]
+    assert events == ["ready", "error", "state", "bye"]
+
+
 def test_realloc_moves_state_and_invalidates_old_copy() -> None:
     game = SyntheticGame()
     game.apply("set stone 999")
@@ -63,7 +85,7 @@ def test_realloc_moves_state_and_invalidates_old_copy() -> None:
 
 
 @pytest.mark.parametrize("cmd", ["", "fly", "set magic 1", "set wood x", "add wood",
-                                 "set population 100000", "get extra"])
+                                 "set population 100000", "get extra", "tick nope"])
 def test_bad_commands(cmd: str) -> None:
     with pytest.raises(CommandError):
         SyntheticGame().apply(cmd)

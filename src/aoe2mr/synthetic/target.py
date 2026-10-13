@@ -146,13 +146,16 @@ class SyntheticGame:
         elif cmd in ("set", "add") and len(args) == 2:
             name = self._field(args[0])
             value = self._number(name, args[1])
+            previous = getattr(self.state, name)
             if cmd == "add":
-                value = getattr(self.state, name) + value
+                value = previous + value
+            expected = ctypes.c_float(value).value if name == "game_time" else value
             setattr(self.state, name, value)
-            if getattr(self.state, name) != value:
+            if getattr(self.state, name) != expected:
+                setattr(self.state, name, previous)  # never leave a wrapped value behind
                 raise CommandError(f"value {value} does not fit field {name}")
         elif cmd == "tick" and len(args) <= 1:
-            seconds = float(args[0]) if args else 1.0
+            seconds = self._number("game_time", args[0]) if args else 1.0
             self.state.game_time += seconds
             self._sync_display()
         elif cmd == "realloc" and not args:

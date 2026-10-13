@@ -33,6 +33,9 @@ def test_user_override(tmp_path: Path) -> None:
         "[logging]\nlevel = \"LOUD\"\n",
         "[discovery]\ntarget_executables = []\n",
         "regions = 5\n",
+        "[regions]\ncommitted_only = \"false\"\n",
+        "[regions]\nmax_regions = \"10\"\n",
+        "[regions]\nmin_region_size = true\n",
         "not toml ===",
     ],
 )

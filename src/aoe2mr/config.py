@@ -80,6 +80,19 @@ def _require(condition: bool, message: str) -> None:
         raise ConfigError(message)
 
 
+def _as_int(value: Any, key: str) -> int:
+    # bool is a subclass of int, so exclude it explicitly.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{key} must be an integer, got {value!r}")
+    return value
+
+
+def _as_bool(value: Any, key: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{key} must be true or false, got {value!r}")
+    return value
+
+
 def _build(raw: dict[str, Any]) -> AppConfig:
     try:
         d = raw["discovery"]
@@ -88,17 +101,17 @@ def _build(raw: dict[str, Any]) -> AppConfig:
 
         r = raw["regions"]
         regions = RegionsConfig(
-            min_region_size=int(r["min_region_size"]),
-            max_regions=int(r["max_regions"]),
-            committed_only=bool(r["committed_only"]),
+            min_region_size=_as_int(r["min_region_size"], "regions.min_region_size"),
+            max_regions=_as_int(r["max_regions"], "regions.max_regions"),
+            committed_only=_as_bool(r["committed_only"], "regions.committed_only"),
         )
         _require(regions.min_region_size >= 0, "regions.min_region_size must be >= 0")
         _require(regions.max_regions > 0, "regions.max_regions must be > 0")
 
         s = raw["sampling"]
         sampling = SamplingConfig(
-            interval_ms=int(s["interval_ms"]),
-            max_snapshot_bytes=int(s["max_snapshot_bytes"]),
+            interval_ms=_as_int(s["interval_ms"], "sampling.interval_ms"),
+            max_snapshot_bytes=_as_int(s["max_snapshot_bytes"], "sampling.max_snapshot_bytes"),
         )
         _require(sampling.interval_ms >= 50, "sampling.interval_ms must be >= 50")
         _require(sampling.max_snapshot_bytes > 0, "sampling.max_snapshot_bytes must be > 0")
@@ -110,8 +123,8 @@ def _build(raw: dict[str, Any]) -> AppConfig:
         logging_cfg = LoggingConfig(
             level=str(lg["level"]).upper(),
             file_name=str(lg["file_name"]),
-            max_bytes=int(lg["max_bytes"]),
-            backup_count=int(lg["backup_count"]),
+            max_bytes=_as_int(lg["max_bytes"], "logging.max_bytes"),
+            backup_count=_as_int(lg["backup_count"], "logging.backup_count"),
         )
         _require(logging_cfg.level in _LOG_LEVELS, f"logging.level must be one of {_LOG_LEVELS}")
     except (KeyError, TypeError, ValueError) as exc:
